@@ -1,7 +1,7 @@
 # Movie Crawler
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-7%2B-green.svg)](MovieCrawler.apk)
+[![Download APK](https://img.shields.io/badge/download-MovieCrawler.apk-3ddc84?style=flat-square)](https://github.com/aswindatha/fuzzy-waddle/raw/main/MovieCrawler.apk)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-blue.svg)](#run)
 [![Deps](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#run)
 
@@ -22,13 +22,15 @@ detail view. Everything runs locally — no accounts, no tracking, no ads.
 
 ### Android app
 
-**[`MovieCrawler.apk`](MovieCrawler.apk)** — signed release, ~189 KB.
+**[⬇ Download `MovieCrawler.apk`](https://github.com/aswindatha/fuzzy-waddle/raw/main/MovieCrawler.apk)**
+(~189 KB, signed release — also visible in the repo file list).
 
-1. Download the APK on your phone (tap the link above → *Download raw file*,
-   or `adb install -r MovieCrawler.apk` from a computer).
-2. Allow "install from this source" when Android asks.
+1. Tap the link on your phone → the APK downloads (one tap, no GitHub login).
+2. Open it → allow "install from this source" when Android asks.
 3. Open **Movie Crawler** — the whole UI and scraper are bundled inside; no
    server or PC needed.
+
+From a computer: `adb install -r MovieCrawler.apk`.
 
 Package `me.moviezda.crawler` · minSdk 24 (Android 7) · targetSdk 34 ·
 debug-signed, so rebuilds install as updates over the same signature.
