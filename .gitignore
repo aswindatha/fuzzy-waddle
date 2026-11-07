@@ -1,0 +1,18 @@
+# runtime state / dev probes
+cache/probe/
+cache/progress.json
+cache/isai-progress.json
+cache/posters.json
+cache/build.log
+nul
+
+# android build artifacts
+android/build/
+*.idsig
+android/debug.keystore
+
+# os / editor junk
+Thumbs.db
+Desktop.ini
+*.log
+.DS_Store
