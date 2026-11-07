@@ -864,6 +864,170 @@
     bg.classList.add("on");
   }
 
+  /* ------------------------------------------- client-side poster lookup
+     wikipedia + tvmaze send Access-Control-Allow-Origin: *, so artwork can be
+     resolved entirely in the page - no helper needed. mirrors Get-PosterImage. */
+  const WIKI_API = "https://en.wikipedia.org/w/api.php";
+  const TVMAZE_API = "https://api.tvmaze.com";
+  let posterMem = {};
+  try { posterMem = JSON.parse(localStorage.getItem("mcposters_v1") || "{}") || {}; } catch (e) { posterMem = {}; }
+  function savePosters() {
+    try {
+      const ks = Object.keys(posterMem);
+      if (ks.length > 3000) { for (const k of ks.slice(0, ks.length - 2000)) delete posterMem[k]; }
+      localStorage.setItem("mcposters_v1", JSON.stringify(posterMem));
+    } catch (e) {}
+  }
+  async function jget(url) {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return null;
+    try { return await r.json(); } catch (e) { return null; }
+  }
+  function cleanTitle(t) {
+    let s = String(t || "");
+    s = s.replace(/\(\d{4}\)/g, " ").replace(/\b(19|20)\d{2}\b/g, " ")
+         .replace(/\b(tamil|telugu|hindi|english|kannada|malayalam|dubbed|dual|audio)\b/gi, " ")
+         .replace(/\b(download|isaidub|isaimini|moviezda|moviesda|isai\s?dub|full|movie|movies|web|series|episodes?|season|hq|hdrip|bluray|web-?dl|pre-?hd|hd|fhd|4k|480p|720p|1080p)\b/gi, " ")
+         .replace(/[^\w\s&]/g, " ").replace(/\s+/g, " ").trim();
+    return s;
+  }
+  function wikiPages(j) {
+    const q = j && j.query, p = q && q.pages;
+    if (!p) return [];
+    return Array.isArray(p) ? p : Object.values(p);
+  }
+  async function wikiPage(query) {
+    const j = await jget(WIKI_API + "?action=query&generator=search&gsrsearch=" + encodeURIComponent(query) +
+      "&gsrnamespace=0&gsrlimit=1&prop=pageprops|images|categories&imlimit=50&pplimit=1&cllimit=50" +
+      "&format=json&formatversion=2&redirects=1");
+    const page = wikiPages(j)[0] || null;
+    if (!page || page.missing) return null;
+    return page;
+  }
+  function filmPage(page) {
+    const cats = (page.categories || []).map((c) => c.title || "");
+    if (!cats.length) return true;
+    return cats.some((c) => /films?$|movies?$|television|series|miniseries|web|animated|documentary|silent|short film/i.test(c));
+  }
+  async function wikiSuggestion(query) {
+    const j = await jget(WIKI_API + "?action=query&list=search&srsearch=" + encodeURIComponent(query) +
+      "&srlimit=1&format=json&formatversion=2");
+    const s = j && j.query && j.query.searchinfo && j.query.searchinfo.suggestion;
+    return s ? String(s) : null;
+  }
+  async function wikiP18(qid) {
+    const j = await jget(WIKI_API + "?action=wbgetentities&ids=" + encodeURIComponent(qid) + "&props=claims&format=json");
+    const ent = j && j.entities && j.entities[qid];
+    const p18 = ent && ent.claims && ent.claims.P18;
+    const v = p18 && p18[0] && p18[0].mainsnak && p18[0].mainsnak.datavalue && p18[0].mainsnak.datavalue.value;
+    return v ? String(v).replace(/^File:/, "") : null;
+  }
+  async function fileThumb(name, width) {
+    width = width || 480;
+    const j = await jget(WIKI_API + "?action=query&titles=" + encodeURIComponent("File:" + name) +
+      "&prop=imageinfo&iiprop=url&iiurlwidth=" + width + "&format=json&formatversion=2");
+    const info = (wikiPages(j)[0] && wikiPages(j)[0].imageinfo || [])[0];
+    return info ? (info.thumburl || info.url || null) : null;
+  }
+  async function findPosterWiki(title) {
+    const ym = /\b(19\d{2}|20\d{2})\b/.exec(title);
+    const clean = cleanTitle(title);
+    if (!clean) return null;
+    const query = clean + (ym ? " " + ym[0] : "");
+
+    let page = await wikiPage(query);
+    if (!page || !filmPage(page)) {
+      const sug = await wikiSuggestion(query);
+      const p2 = sug ? await wikiPage(sug) : null;
+      page = (p2 && filmPage(p2)) ? p2 : null;
+    }
+    if (!page) return null;
+
+    // 1) authoritative: wikidata P18 (infobox image)
+    try {
+      const pp = page.pageprops, qid = pp && pp.wikibase_item;
+      if (qid) {
+        const f = await wikiP18(String(qid));
+        if (f) { const u = await fileThumb(f); if (u) return u; }
+      }
+    } catch (e) {}
+
+    // 2) fallback: score image filenames
+    const images = page.images || [];
+    if (!images.length) return null;
+    const ttoks = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter((w) => w.length >= 2 || /^\d+$/.test(w));
+    let pick = null, best = -999;
+    for (const im of images) {
+      try {
+        let n = String(im.title || "").replace(/^File:/, "");
+        const base = n.replace(/\.(jpe?g|png|webp)$/i, "");
+        const fn = base.toLowerCase().replace(/(\w)\.(?=\w)/g, "$1").replace(/[^a-z0-9]+/g, " ").trim();
+        const ftoks = fn.split(/\s+/).filter(Boolean);
+        let score = 0;
+        if (/poster/i.test(n)) score += 4;
+        if (/theatrical|teaser|promotional|promote|banner|key art|one sheet/i.test(n)) score += 2;
+        if (/screenshot|screen shot|cover|dvd|blu-?ray|logotype|poster for|advert|wallpaper|stills|behind|interview|event|launch|ceremony|award|red.?carpet|airport/i.test(n)) score -= 10;
+        if (/\.(jpe?g|png|webp)$/i.test(n)) score += 1;
+        let hit = 0; for (const w of ttoks) if (ftoks.includes(w)) hit++;
+        score += Math.min(8, hit * 2);
+        const extra = ftoks.length - ttoks.length;
+        if (extra <= 1 && hit > 0) score += 3; else if (extra > 4) score -= 2;
+        if (score > best) { best = score; pick = n; }
+      } catch (e) {}
+    }
+    if (!pick || best <= 0) return null;
+    return await fileThumb(pick);
+  }
+  function tvmazeMatch(title, show) {
+    const name = String((show && show.name) || "").toLowerCase();
+    const nset = new Set(name.replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(Boolean));
+    const ttoks = cleanTitle(title).toLowerCase().replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/).filter((w) => w.length >= 3 && !/^\d+$/.test(w));
+    if (ttoks.length && !ttoks.every((w) => nset.has(w))) return false;
+    const ty = /\b(19\d{2}|20\d{2})\b/.exec(title);
+    const py = show && show.premiered ? parseInt(String(show.premiered).slice(0, 4), 10) : NaN;
+    if (ty && !isNaN(py) && Math.abs(parseInt(ty[0], 10) - py) > 2) return false;
+    return true;
+  }
+  async function findPosterTvmaze(title) {
+    const clean = cleanTitle(title);
+    if (!clean) return null;
+    const arr = await jget(TVMAZE_API + "/search/shows?q=" + encodeURIComponent(clean));
+    if (!arr || !arr.length) return null;
+    for (const hit of arr.slice(0, 6)) {
+      const show = hit && hit.show;
+      if (!show || !tvmazeMatch(title, show)) continue;
+      const img = show.image;
+      const u = img && (img.original || img.medium);
+      if (u) return u;
+    }
+    return null;
+  }
+  async function posterFor(r) {
+    const key = (r.t + "|" + r.u).toLowerCase();
+    if (posterMem[key] !== undefined) return posterMem[key];
+    const series = /series|season|episode/i.test(r.u) ||
+                   /\b(web\s*)?series\b|\bseason\s*\d|\bs\d{1,2}e\d/i.test(r.t);
+    let img = null;
+    try {
+      if (series) img = await findPosterTvmaze(r.t);
+      if (!img) img = await findPosterWiki(r.t);
+      if (!img && !series) img = await findPosterTvmaze(r.t);
+    } catch (e) { img = null; }
+    posterMem[key] = img || null;
+    savePosters();
+    return posterMem[key];
+  }
+  let heroSeq = 0;
+  function ensurePoster(r) {
+    const tok = heroSeq;
+    posterFor(r).then((u) => {
+      if (tok !== heroSeq || !u) return;
+      if ($("#dPoster").querySelector("img")) return;   // a poster is already shown
+      applyHeroImage(u);
+    }).catch(() => {});
+  }
+
   function openEntry(r) {
     if (!r) return;
     currentMovie = { t: r.t, u: r.u, s: r.s };
@@ -873,6 +1037,8 @@
     $("#dIni").textContent = iniOf(r.t);
     $("#dPoster").style.background = posterBg(r.t);
     applyHeroImage(null);
+    heroSeq++;
+    ensurePoster(r);
     const sc = $("#dSite");
     sc.textContent = SITE_NAME[r.s];
     sc.className = "hchip" + (r.s === "isaidub" ? " site-isai" : "");
@@ -906,7 +1072,11 @@
         "&u=" + encodeURIComponent(r.u) + "&t=" + encodeURIComponent(r.t), { cache: "no-store" });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || "failed");
-      if (j.img) applyHeroImage(j.img);
+      if (j.img) {
+        applyHeroImage(j.img);
+        const pk = (r.t + "|" + r.u).toLowerCase();
+        if (posterMem[pk] === undefined) { posterMem[pk] = j.img; savePosters(); }
+      }
       renderVariants(j.variants || [], j.cached ? "cached" : (j.stale ? "stale cache" : ""));
     } catch (e) {
       $("#dVars").innerHTML = "<div class='empty'><div class='e-ico'>" + ic("warn", 20) + "</div>Could not read that movie: <code style='font-family:var(--mono);font-size:11px'>" + esc(e.message) + "</code></div>";

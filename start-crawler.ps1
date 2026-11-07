@@ -785,6 +785,36 @@ function Find-PosterWiki {
   return $null
 }
 
+function Test-TvmazeMatch {
+  param([string]$Title, $Show)
+  if (-not $Show) { return $false }
+  try {
+    $name = [string]$Show.name
+    if (-not $name) { return $false }
+    $nset = @{}
+    foreach ($w in ([regex]::Replace($name.ToLower(), '[^a-z0-9]+', ' ') -split '\s+')) {
+      if ($w) { $nset[$w] = $true }
+    }
+    $clean = Get-CleanTitle $Title
+    $ttoks = @([regex]::Replace($clean.ToLower(), '[^a-z0-9]+', ' ') -split '\s+' |
+              Where-Object { $_.Length -ge 3 -and $_ -notmatch '^\d+$' })
+    if ($ttoks.Count -gt 0) {
+      foreach ($w in $ttoks) { if (-not $nset.ContainsKey($w)) { return $false } }
+    }
+    $ty = [regex]::Match($Title, '\b(19\d{2}|20\d{2})\b')
+    $prem = $null
+    $pp = $Show.PSObject.Properties['premiered']
+    if ($pp -and $pp.Value) { $prem = [string]$pp.Value }
+    if ($ty.Success -and $prem -and $prem.Length -ge 4) {
+      $py = 0
+      if ([int]::TryParse($prem.Substring(0, 4), [ref]$py)) {
+        if ([Math]::Abs([int]$ty.Value - $py) -gt 2) { return $false }
+      }
+    }
+    return $true
+  } catch { return $false }
+}
+
 function Find-PosterTvmaze {
   param([string]$Title)
   try {
@@ -794,15 +824,18 @@ function Find-PosterTvmaze {
     $r  = Invoke-MetaHttp -Url ('https://api.tvmaze.com/search/shows?q=' + $qs)
     if ($r.Status -ne 200) { return $null }
     $arr = @($r.Text | ConvertFrom-Json)
-    if ($arr.Count -lt 1) { return $null }
-    $show = $arr[0].show
-    if (-not $show) { return $null }
-    $img = $show.image
-    if (-not $img) { return $null }
-    $u = $null
-    if ($img.PSObject.Properties['original']) { $u = $img.original }
-    if (-not $u -and $img.PSObject.Properties['medium']) { $u = $img.medium }
-    if ($u) { return @{ img = [string]$u } }
+    foreach ($hit in @($arr | Select-Object -First 6)) {
+      try {
+        $show = $hit.show
+        if (-not $show -or -not (Test-TvmazeMatch $Title $show)) { continue }
+        $img = $show.image
+        if (-not $img) { continue }
+        $u = $null
+        if ($img.PSObject.Properties['original']) { $u = $img.original }
+        if (-not $u -and $img.PSObject.Properties['medium']) { $u = $img.medium }
+        if ($u) { return @{ img = [string]$u } }
+      } catch { continue }
+    }
     return $null
   } catch { return $null }
 }

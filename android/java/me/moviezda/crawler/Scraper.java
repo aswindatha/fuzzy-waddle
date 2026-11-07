@@ -650,6 +650,30 @@ final class Scraper {
         return fileThumb(pick);
     }
 
+    private static boolean tvmazeMatch(String title, JSONObject show) {
+        try {
+            String name = show.optString("name", "");
+            if (name.isEmpty()) return false;
+            Set<String> nset = new HashSet<>();
+            for (String w : name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim().split("\\s+")) {
+                if (!w.isEmpty()) nset.add(w);
+            }
+            for (String w : cleanTitle(title).toLowerCase(Locale.ROOT)
+                    .replaceAll("[^a-z0-9]+", " ").trim().split("\\s+")) {
+                if (w.length() >= 3 && !w.matches("\\d+") && !nset.contains(w)) return false;
+            }
+            Matcher ty = Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b").matcher(title);
+            String prem = show.optString("premiered", null);
+            if (ty.find() && prem != null && prem.length() >= 4) {
+                try {
+                    int py = Integer.parseInt(prem.substring(0, 4));
+                    if (Math.abs(Integer.parseInt(ty.group()) - py) > 2) return false;
+                } catch (NumberFormatException ignored) { }
+            }
+            return true;
+        } catch (Exception e) { return false; }
+    }
+
     private static String posterTvmaze(String title) {
         try {
             String clean = cleanTitle(title);
@@ -657,14 +681,17 @@ final class Scraper {
             String body = metaGet("https://api.tvmaze.com/search/shows?q=" + URLEncoder.encode(clean, "UTF-8"));
             if (body == null) return null;
             JSONArray arr = new JSONArray(body);
-            if (arr.length() == 0) return null;
-            JSONObject show = arr.getJSONObject(0).optJSONObject("show");
-            if (show == null) return null;
-            JSONObject img = show.optJSONObject("image");
-            if (img == null) return null;
-            String u = img.optString("original", null);
-            if (u == null) u = img.optString("medium", null);
-            return u;
+            for (int i = 0; i < Math.min(arr.length(), 6); i++) {
+                JSONObject hit = arr.optJSONObject(i);
+                JSONObject show = hit == null ? null : hit.optJSONObject("show");
+                if (show == null || !tvmazeMatch(title, show)) continue;
+                JSONObject img = show.optJSONObject("image");
+                if (img == null) continue;
+                String u = img.optString("original", null);
+                if (u == null || u.isEmpty()) u = img.optString("medium", null);
+                if (u != null && !u.isEmpty()) return u;
+            }
+            return null;
         } catch (Exception e) { return null; }
     }
 
